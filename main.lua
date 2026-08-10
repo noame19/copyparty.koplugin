@@ -284,21 +284,19 @@ local function show_server_info()
     local pass = get_setting("admin_pass")
 
     local lines = {
-        -- 第一行：Copyparty 运行中 / 未运行
+        -- 第一行同时作为状态指示：Copyparty 运行中 / 未运行
         T(_("Copyparty %1"), running and _("运行中") or _("未运行")),
-        -- 第 2 行：状态
-        "  " .. _("状态") .. "        " .. (running and _("运行中") or _("未运行")),
-        -- 第 3 行：HTTP 端口
+        -- 第 2 行：HTTP 端口
         "  " .. _("HTTP端口") .. "    " .. http_port,
-        -- 第 4 行：FTP 端口（启用显示端口，关闭显示"（关闭）"）
+        -- 第 3 行：FTP 端口（启用显示端口，关闭显示"（关闭）"）
         "  " .. _("FTP端口") .. "    " .. (ftp_on and ftp_port or (ftp_port .. "（关闭）")),
-        -- 第 5 行：模式
+        -- 第 4 行：模式
         "  " .. _("模式") .. "        " .. (readonly and _("只读") or _("读写")),
-        -- 第 6 行：认证（密码非空 = 需要密码；空 = 匿名）
+        -- 第 5 行：认证（密码非空 = 需要密码；空 = 匿名）
         "  " .. _("认证") .. "        " .. (pass ~= "" and _("需要密码") or _("匿名无密码")),
-        -- 第 7 行：根目录
+        -- 第 6 行：根目录
         "  " .. _("根目录") .. "    " .. get_setting("data_path"),
-        -- 第 8 行：访问地址
+        -- 第 7 行：访问地址
         "  " .. _("访问地址") .. " http://" .. ip .. ":" .. http_port .. "/",
     }
     -- FTP 启用时附 ftp 地址（缩进 4 个空格对齐）
@@ -509,11 +507,21 @@ function Copyparty:addToMainMenu(menu_items)
     --   之前用 sorting_hint = "filemanager" 触发 MenuSorter 数组越界崩溃
     --   用 sorting_hint = "network" 会跑到 SSH 子菜单里去（不符合用户预期）
     -- - 父菜单项加 checked_func：运行时显示 ✓，停止显示空格（仿 SSH）
+    -- - 父菜单项加 hold_callback：长按 Copyparty 这一行也能启动/停止（仿 SSH）
     -- - 运行时灰掉配置项（除运行 toggle、当前状态、最近日志、开机自启）
+    -- - 所有 callback 项 keep_menu_open=true（弹窗不关闭菜单，仿 SSH）
     -- - 文案用 text_func 把当前值拼进去（SSH 风格）
     menu_items.copyparty = {
         text = _("Copyparty"),
         checked_func = function() return is_running() end,
+        -- 长按父项也能启动/停止服务（仿 SSH plugin）
+        hold_callback = function(touchmenu_instance)
+            if is_running() then stop_server() else start_server(self) end
+            ffiutil.sleep(1)
+            if touchmenu_instance and touchmenu_instance.updateItems then
+                touchmenu_instance:updateItems()
+            end
+        end,
         sub_item_table = {
             -- 主开关：始终可点
             {
@@ -524,9 +532,10 @@ function Copyparty:addToMainMenu(menu_items)
                     if is_running() then stop_server() else start_server(self) end
                 end,
             },
-            -- 操作型：始终可点
+            -- 操作型：弹窗后保持菜单（仿 SSH 的"SSH public key"）
             {
                 text = _("当前状态"),
+                keep_menu_open = true,
                 callback = function() show_server_info() end,
             },
             -- 配置项：运行时灰掉
@@ -635,9 +644,10 @@ function Copyparty:addToMainMenu(menu_items)
                     set_setting("quiet", not get_setting("quiet"))
                 end,
             },
-            -- 操作型：始终可点
+            -- 操作型：弹窗后保持菜单
             {
                 text = _("最近日志"),
+                keep_menu_open = true,
                 callback = function() show_log_pager() end,
             },
             -- 始终可点（仿 SSH autostart：运行中也能切）
