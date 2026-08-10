@@ -49,7 +49,7 @@ local DEFAULTS = {
     ftp_port        = "3921",   -- FTP 端口（仅在启用 FTP 时使用）
     data_path       = "/mnt/us",-- 默认数据目录（Kindle 用户区）
     autostart       = false,    -- 开机自启
-    ftp_enabled     = true,     -- 是否启用 FTP
+    ftp_enabled     = false,    -- 是否启用 FTP（默认关，省电+安全）
     require_pass    = false,    -- 是否要求密码（默认匿名访问）
     admin_user      = "admin",  -- 管理员用户名
     admin_pass      = "",       -- 管理员密码（仅在 require_pass=true 时使用）
