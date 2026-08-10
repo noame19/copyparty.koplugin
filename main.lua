@@ -77,7 +77,23 @@ end
 -- 状态查询
 -- ============================================================
 local function is_running()
-    return util.pathExists(pid_path)
+    -- 仿 filebrowserplus.koplugin：用 kill -0 PID 验证进程真在
+    -- 避免 PID 文件残留但进程已死的误判
+    local f = io.open(pid_path, "r")
+    if not f then return false end
+    local pid = f:read("*l")
+    f:close()
+    if not pid or pid == "" then
+        os.remove(pid_path)
+        return false
+    end
+    local check = os.execute(string.format("kill -0 %s 2>/dev/null", pid))
+    if check == 0 or check == true then
+        return true
+    end
+    -- PID 文件残留但进程已死
+    os.remove(pid_path)
+    return false
 end
 
 local function read_pid()
@@ -89,10 +105,17 @@ local function read_pid()
 end
 
 local function get_network_info()
+    -- 仿 filebrowserplus.koplugin：Device:retrieveNetworkInfo() 在不同平台可能返回
+    -- table {ip=...} 或字符串，两种都处理
     if Device.retrieveNetworkInfo then
         local ok, info = pcall(Device.retrieveNetworkInfo, Device)
-        if ok and info and info ~= "" then
-            return info
+        if ok and info then
+            if type(info) == "table" and info.ip then
+                return info.ip
+            elseif type(info) == "string" then
+                local ip = info:match("(%d+%.%d+%.%d+%.%d+)")
+                if ip then return ip end
+            end
         end
     end
     return _("未能获取 IP（请确认 WiFi 已连接）")
@@ -156,10 +179,29 @@ local function start_server(self)
     -- 确保日志目录存在
     os.execute("mkdir -p " .. plugin_dir)
 
+    -- 仿照 SSH.koplugin / filebrowserplus.koplugin：
+    -- Kindle 的 INPUT 链默认 policy DROP，必须显式放行端口
+    if Device:isKindle() then
+        os.execute(string.format("%s %s %s",
+            "iptables -A INPUT -p tcp --dport", get_setting("http_port"),
+            "-m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"))
+        os.execute(string.format("%s %s %s",
+            "iptables -A OUTPUT -p tcp --sport", get_setting("http_port"),
+            "-m conntrack --ctstate ESTABLISHED -j ACCEPT"))
+        if get_setting("ftp_enabled") then
+            os.execute(string.format("%s %s %s",
+                "iptables -A INPUT -p tcp --dport", get_setting("ftp_port"),
+                "-m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"))
+            os.execute(string.format("%s %s %s",
+                "iptables -A OUTPUT -p tcp --sport", get_setting("ftp_port"),
+                "-m conntrack --ctstate ESTABLISHED -j ACCEPT"))
+        end
+    end
+
     local cmd = build_command()
-    -- 把进程丢到后台，日志写文件，PID 写文件
+    -- nohup 防 SIGHUP；& echo $! > pid_file 跟 filebrowserplus 同样的写法
     local full_cmd = string.format(
-        "%s > %s 2>&1 & echo $! > %s",
+        "nohup %s > %s 2>&1 & echo $! > %s",
         cmd, log_path, pid_path
     )
 
@@ -207,6 +249,24 @@ local function stop_server()
         end
     end
     os.remove(pid_path)
+
+    -- 收尾：把 Kindle 上的 iptables 规则删掉（仿 filebrowserplus.koplugin）
+    if Device:isKindle() then
+        os.execute(string.format("%s %s %s",
+            "iptables -D INPUT -p tcp --dport", get_setting("http_port"),
+            "-m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"))
+        os.execute(string.format("%s %s %s",
+            "iptables -D OUTPUT -p tcp --sport", get_setting("http_port"),
+            "-m conntrack --ctstate ESTABLISHED -j ACCEPT"))
+        if get_setting("ftp_enabled") then
+            os.execute(string.format("%s %s %s",
+                "iptables -D INPUT -p tcp --dport", get_setting("ftp_port"),
+                "-m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"))
+            os.execute(string.format("%s %s %s",
+                "iptables -D OUTPUT -p tcp --sport", get_setting("ftp_port"),
+                "-m conntrack --ctstate ESTABLISHED -j ACCEPT"))
+        end
+    end
 
     UIManager:show(InfoMessage:new{
         text = _("Copyparty 已停止。"),
