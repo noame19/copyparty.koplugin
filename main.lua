@@ -213,15 +213,9 @@ local function start_server(self)
     os.execute("sleep 1")
 
     if is_running() then
-        local info_text = T(_("Copyparty 已启动\n\nHTTP/WebDAV: 端口 %1\nFTP: %2\n数据目录: %3\n\n%4"),
-            get_setting("http_port"),
-            get_setting("ftp_enabled") and get_setting("ftp_port") or _("关闭"),
-            get_setting("data_path"),
-            get_network_info())
-        UIManager:show(InfoMessage:new{
-            timeout = 10,
-            text = info_text,
-        })
+        -- 启动成功：复用「当前状态」的 8 行模板，避免两处文案不一致
+        -- show_server_info 在文件下方定义
+        show_server_info()
     else
         UIManager:show(InfoMessage:new{
             icon = "notice-warning",
