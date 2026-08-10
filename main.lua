@@ -511,12 +511,13 @@ end
 
 function Copyparty:addToMainMenu(menu_items)
     -- 全部项平铺在 Copyparty 顶层（用户最终版）
-    -- - sorting_hint = "filemanager"：放到「文件管理设置」分区
+    -- - 不写 sorting_hint：让 KOReader 默认处理（orphan，"NEW:" 前缀）
+    --   之前用 sorting_hint = "filemanager" 触发 MenuSorter 数组越界崩溃
+    --   用 sorting_hint = "network" 会跑到 SSH 子菜单里去（不符合用户预期）
     -- - 父菜单项加 checked_func：运行时显示 ✓，停止显示空格（仿 SSH）
     -- - 运行时灰掉配置项（除运行 toggle、当前状态、最近日志、开机自启）
     -- - 文案用 text_func 把当前值拼进去（SSH 风格）
     menu_items.copyparty = {
-        sorting_hint = "filemanager",
         text = _("Copyparty"),
         checked_func = function() return is_running() end,
         sub_item_table = {
