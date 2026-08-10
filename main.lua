@@ -414,114 +414,187 @@ local function show_text_dialog(title, current_value, on_save, password_mode)
 end
 
 -- ============================================================
--- 设置菜单
+-- 设置菜单（simpleUI 风格：开关是 toggle，点值才弹窗，能返回上一级）
+-- 注意：不再用 Menu:new + UIManager:show 推菜单，而是返回 item_table
+-- 直接嵌入 addToMainMenu 的 sub_item_table，KOReader Menu widget 自动处理导航
 -- ============================================================
-local function show_settings_menu(self)
-    local function refresh()
-        show_settings_menu(self)
-    end
+local function build_settings_items(self)
+    -- 注意：菜单本身 keep_menu_open=true 时，InputDialog 关闭后菜单不会关，
+    -- Menu widget 会重新调用 text_func/value_func，所以读最新设置即可
 
-    local items = {
+    return {
         {
-            text = T(_("HTTP/WebDAV 端口: %1"), get_setting("http_port")),
+            text = _("HTTP/WebDAV 端口"),
+            value_func = function() return get_setting("http_port") end,
+            keep_menu_open = true,
             callback = function()
                 show_port_dialog(
                     _("HTTP/WebDAV 端口"),
                     get_setting("http_port"),
-                    function(v) set_setting("http_port", v); refresh() end
+                    function(v) set_setting("http_port", v) end
                 )
             end,
         },
         {
-            text = T(_("FTP: %1"), get_setting("ftp_enabled") and _("开启") or _("关闭")),
-            callback = function()
-                set_setting("ftp_enabled", not get_setting("ftp_enabled"))
-                refresh()
-            end,
-        },
-        {
-            text = T(_("FTP 端口: %1（需要先开启FTP）"), get_setting("ftp_port")),
+            text = _("FTP 端口"),
+            value_func = function() return get_setting("ftp_port") end,
             enabled_func = function() return get_setting("ftp_enabled") end,
+            keep_menu_open = true,
             callback = function()
                 show_port_dialog(
                     _("FTP 端口"),
                     get_setting("ftp_port"),
-                    function(v) set_setting("ftp_port", v); refresh() end
+                    function(v) set_setting("ftp_port", v) end
                 )
             end,
         },
         {
-            text = T(_("数据目录: %1"), get_setting("data_path")),
+            text = _("启用 FTP"),
+            checked_func = function() return get_setting("ftp_enabled") end,
+            keep_menu_open = true,
+            callback = function()
+                set_setting("ftp_enabled", not get_setting("ftp_enabled"))
+            end,
+        },
+        {
+            text = _("数据目录"),
+            value_func = function() return get_setting("data_path") end,
+            keep_menu_open = true,
             callback = function()
                 show_text_dialog(
-                    _("数据目录（注意权限）"),
+                    _("数据目录"),
                     get_setting("data_path"),
-                    function(v) set_setting("data_path", v); refresh() end
+                    function(v) set_setting("data_path", v) end
                 )
             end,
         },
         {
-            text = T(_("开机自启: %1"), get_setting("autostart") and _("开") or _("关")),
+            text = _("开机自启"),
+            checked_func = function() return get_setting("autostart") end,
+            keep_menu_open = true,
             callback = function()
                 set_setting("autostart", not get_setting("autostart"))
-                refresh()
             end,
         },
         {
-            text = T(_("需要密码: %1"), get_setting("require_pass") and _("开") or _("关（匿名）")),
+            separator = true,
+        },
+        {
+            text = _("需要密码"),
+            checked_func = function() return get_setting("require_pass") end,
+            keep_menu_open = true,
             callback = function()
                 set_setting("require_pass", not get_setting("require_pass"))
-                refresh()
             end,
         },
         {
-            text = T(_("管理员用户名: %1"), get_setting("admin_user")),
+            text = _("管理员用户名"),
+            value_func = function() return get_setting("admin_user") end,
             enabled_func = function() return get_setting("require_pass") end,
+            keep_menu_open = true,
             callback = function()
                 show_text_dialog(
                     _("管理员用户名"),
                     get_setting("admin_user"),
-                    function(v) set_setting("admin_user", v); refresh() end
+                    function(v) set_setting("admin_user", v) end
                 )
             end,
         },
         {
-            text = get_setting("admin_pass") ~= "" and _("设置密码（已设置）") or _("设置密码（未设置）"),
+            text = _("管理员密码"),
+            value_func = function()
+                local p = get_setting("admin_pass")
+                if p == "" then return _("未设置") end
+                return string.rep("•", math.min(12, #p))
+            end,
             enabled_func = function() return get_setting("require_pass") end,
+            keep_menu_open = true,
             callback = function()
+                -- 安全：永远不显示已设密码，让用户重新输入
                 show_text_dialog(
-                    _("管理员密码"),
-                    get_setting("admin_pass"),
-                    function(v) set_setting("admin_pass", v); refresh() end,
+                    _("管理员密码（输入新值覆盖）"),
+                    "",
+                    function(v) set_setting("admin_pass", v) end,
                     true  -- password mode
                 )
             end,
         },
         {
-            text = T(_("只读模式: %1"), get_setting("readonly") and _("开") or _("关")),
+            separator = true,
+        },
+        {
+            text = _("只读模式"),
+            checked_func = function() return get_setting("readonly") end,
+            keep_menu_open = true,
             callback = function()
                 set_setting("readonly", not get_setting("readonly"))
-                refresh()
             end,
         },
         {
-            text = T(_("安静模式: %1"), get_setting("quiet") and _("开（推荐）") or _("关（更详细日志）")),
+            text = _("安静模式"),
+            checked_func = function() return get_setting("quiet") end,
+            keep_menu_open = true,
             callback = function()
                 set_setting("quiet", not get_setting("quiet"))
-                refresh()
+            end,
+        },
+    }
+end
+
+-- ============================================================
+-- 访问信息子菜单（只读），同样返回 item_table
+-- ============================================================
+local function build_access_info_items()
+    local items = {
+        {
+            text = _("状态"),
+            value_func = function() return is_running() and _("运行中") or _("未运行") end,
+        },
+        {
+            text = _("本机 IP"),
+            value_func = function() return get_network_info() end,
+        },
+        {
+            text = _("HTTP/WebDAV 端口"),
+            value_func = function() return get_setting("http_port") end,
+        },
+        {
+            text = _("数据目录"),
+            value_func = function() return get_setting("data_path") end,
+        },
+        {
+            text = _("访问模式"),
+            value_func = function()
+                if get_setting("readonly") then return _("只读") end
+                if get_setting("require_pass") then return _("需要密码") end
+                return _("匿名读写")
             end,
         },
         {
-            text = _("返回"),
-            callback = function() UIManager:close(self._settings_menu) end,
+            separator = true,
+        },
+        {
+            text = _("HTTP 访问地址"),
+            value_func = function()
+                return "http://" .. get_network_info() .. ":" .. get_setting("http_port") .. "/"
+            end,
+        },
+        {
+            text = _("WebDAV（同 HTTP 端口）"),
+            value_func = function()
+                return "http://" .. get_network_info() .. ":" .. get_setting("http_port") .. "/"
+            end,
+        },
+        {
+            text = _("FTP"),
+            value_func = function()
+                if not get_setting("ftp_enabled") then return _("未启用") end
+                return "ftp://" .. get_network_info() .. ":" .. get_setting("ftp_port") .. "/"
+            end,
+            enabled_func = function() return get_setting("ftp_enabled") end,
         },
     }
-
-    self._settings_menu = Menu:new{
-        title = _("Copyparty 设置"),
-        item_table = items,
-    }
-    UIManager:show(self._settings_menu)
+    return items
 end
 
 -- ============================================================
@@ -549,26 +622,43 @@ function Copyparty:onDispatcherRegisterActions()
 end
 
 function Copyparty:addToMainMenu(menu_items)
+    -- 直接把子菜单项内嵌在 sub_item_table 里（simpleUI 风格）
+    -- KOReader 的 Menu widget 会自动处理导航（进子菜单 + 返回上一级）
     menu_items.copyparty = {
+        sorting_hint = "network",  -- 放到 KOReader 主菜单的"网络"分区
         text = _("Copyparty"),
         sub_item_table = {
             {
-                text = is_running() and _("停止 Copyparty") or _("启动 Copyparty"),
+                -- 主开关：simpleUI 风格的 toggle（左侧 ✓）
+                text = _("运行 Copyparty"),
+                checked_func = function() return is_running() end,
+                keep_menu_open = true,
                 callback = function()
                     if is_running() then stop_server() else start_server(self) end
                 end,
             },
             {
-                text = _("服务信息"),
-                callback = function() show_server_info() end,
+                -- 进到子菜单：访问信息
+                text = _("访问信息"),
+                sub_item_table = build_access_info_items(),
             },
             {
+                -- 进到子菜单：设置
                 text = _("设置"),
-                callback = function() show_settings_menu(self) end,
+                sub_item_table = build_settings_items(self),
             },
             {
-                text = _("查看日志"),
+                separator = true,
+            },
+            {
+                -- 操作型：一次性查看日志
+                text = _("查看最近日志"),
                 callback = function() show_log() end,
+            },
+            {
+                -- 操作型：完整状态弹窗
+                text = _("完整状态信息"),
+                callback = function() show_server_info() end,
             },
         },
     }
