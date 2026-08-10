@@ -276,41 +276,40 @@ end
 -- ============================================================
 -- 显示服务器信息
 -- ============================================================
+-- ============================================================
+-- "当前状态" 弹窗（用户给的 8 行紧凑版）
+-- ============================================================
 local function show_server_info()
-    local status = is_running() and _("运行中") or _("未运行")
+    local running = is_running()
+    local ip = get_network_info()
+    local http_port = get_setting("http_port")
+    local ftp_port = get_setting("ftp_port")
+    local ftp_on = get_setting("ftp_enabled")
+    local readonly = get_setting("readonly")
+    local pass = get_setting("admin_pass")
+
     local lines = {
-        _("Copyparty 服务状态"),
-        "",
-        T(_("状态: %1"), status),
-        "",
-        T(_("HTTP/WebDAV 端口: %1"), get_setting("http_port")),
+        -- 第一行：Copyparty 运行中 / 未运行
+        T(_("Copyparty %1"), running and _("运行中") or _("未运行")),
+        -- 第 2 行：状态
+        "  " .. _("状态") .. "        " .. (running and _("运行中") or _("未运行")),
+        -- 第 3 行：HTTP 端口
+        "  " .. _("HTTP端口") .. "    " .. http_port,
+        -- 第 4 行：FTP 端口（启用显示端口，关闭显示"（关闭）"）
+        "  " .. _("FTP端口") .. "    " .. (ftp_on and ftp_port or (ftp_port .. "（关闭）")),
+        -- 第 5 行：模式
+        "  " .. _("模式") .. "        " .. (readonly and _("只读") or _("读写")),
+        -- 第 6 行：认证（密码非空 = 需要密码；空 = 匿名）
+        "  " .. _("认证") .. "        " .. (pass ~= "" and _("需要密码") or _("匿名无密码")),
+        -- 第 7 行：根目录
+        "  " .. _("根目录") .. "    " .. get_setting("data_path"),
+        -- 第 8 行：访问地址
+        "  " .. _("访问地址") .. " http://" .. ip .. ":" .. http_port .. "/",
     }
-    if get_setting("ftp_enabled") then
-        table.insert(lines, T(_("FTP 端口: %1"), get_setting("ftp_port")))
-    else
-        table.insert(lines, _("FTP: 关闭"))
+    -- FTP 启用时附 ftp 地址（缩进 4 个空格对齐）
+    if ftp_on then
+        table.insert(lines, "    ftp://" .. ip .. ":" .. ftp_port .. "/")
     end
-    table.insert(lines, T(_("数据目录: %1"), get_setting("data_path")))
-    if get_setting("readonly") then
-        table.insert(lines, _("模式: 只读"))
-    end
-    if get_setting("require_pass") then
-        table.insert(lines, _("认证: 需要密码"))
-    else
-        table.insert(lines, _("认证: 匿名（无密码）"))
-    end
-    table.insert(lines, "")
-    table.insert(lines, _("网络信息:"))
-    table.insert(lines, get_network_info())
-    table.insert(lines, "")
-    table.insert(lines, _("访问地址:"))
-    table.insert(lines, T(_("http://<你的 IP>:%1/"), get_setting("http_port")))
-    if get_setting("ftp_enabled") then
-        table.insert(lines, T(_("ftp://<你的 IP>:%1/"), get_setting("ftp_port")))
-    end
-    table.insert(lines, "")
-    table.insert(lines, _("WebDAV 地址（同 HTTP 端口）:"))
-    table.insert(lines, T(_("http://<你的 IP>:%1/"), get_setting("http_port")))
 
     UIManager:show(InfoMessage:new{
         text = table.concat(lines, "\n"),
@@ -318,30 +317,97 @@ local function show_server_info()
 end
 
 -- ============================================================
--- 显示日志（最近 50 行）
+-- "最近日志" 翻页弹窗：每页 15 行，最多 4 页，末尾 60 行
+-- 用 ButtonDialog 实现 [上一页][下一页][关闭] 三个按钮
 -- ============================================================
-local function show_log()
+local function show_log_pager()
+    -- 1. 读完整份日志
+    local all = {}
     local f = io.open(log_path, "r")
-    local content = _("（暂无日志）")
     if f then
-        local lines = {}
         for line in f:lines() do
-            table.insert(lines, line)
+            table.insert(all, line)
         end
         f:close()
-        if #lines > 0 then
-            local start = math.max(1, #lines - 49)
-            local buf = {}
-            for i = start, #lines do
-                table.insert(buf, lines[i])
-            end
-            content = table.concat(buf, "\n")
-        end
     end
 
-    UIManager:show(InfoMessage:new{
-        text = content,
-    })
+    -- 2. 只保留末尾 60 行（超过 60 行就裁掉开头的）
+    if #all > 60 then
+        local trimmed = {}
+        for i = #all - 59, #all do
+            table.insert(trimmed, all[i])
+        end
+        all = trimmed
+    end
+
+    -- 3. 计算总页数（每页 15 行，至少 1 页）
+    local total_pages = math.max(1, math.ceil(#all / 15))
+    -- 默认打开到最后一页（最新的）
+    local current_page = total_pages
+    local current_dialog
+
+    local function get_content()
+        if #all == 0 then return _("（暂无日志）") end
+        local start_idx = (current_page - 1) * 15 + 1
+        local finish_idx = math.min(start_idx + 14, #all)
+        local page = {}
+        for i = start_idx, finish_idx do
+            table.insert(page, all[i])
+        end
+        return table.concat(page, "\n")
+    end
+
+    local function get_title()
+        if #all == 0 then return _("最近日志") end
+        return T(_("最近日志（第 %1/%2 页）"), current_page, total_pages)
+    end
+
+    local function show_page()
+        -- 关掉旧弹窗，开新的（KOReader 的 ButtonDialog 不能热更新内容）
+        if current_dialog then
+            UIManager:close(current_dialog)
+        end
+        current_dialog = ButtonDialog:new{
+            title = get_title(),
+            text = get_content(),
+            width_factor = 0.95,
+            buttons = {
+                {
+                    {
+                        text = _("上一页"),
+                        -- 第一页时灰掉
+                        enabled_func = function() return current_page > 1 end,
+                        callback = function()
+                            if current_page > 1 then
+                                current_page = current_page - 1
+                                show_page()
+                            end
+                        end,
+                    },
+                    {
+                        text = _("下一页"),
+                        -- 最后一页时灰掉
+                        enabled_func = function() return current_page < total_pages end,
+                        callback = function()
+                            if current_page < total_pages then
+                                current_page = current_page + 1
+                                show_page()
+                            end
+                        end,
+                    },
+                    {
+                        text = _("关闭"),
+                        callback = function()
+                            UIManager:close(current_dialog)
+                        end,
+                    },
+                },
+            },
+        }
+        UIManager:show(current_dialog)
+    end
+
+    show_page()
 end
 
 -- ============================================================
@@ -414,188 +480,9 @@ local function show_text_dialog(title, current_value, on_save, password_mode)
 end
 
 -- ============================================================
--- 设置菜单（simpleUI 风格：开关是 toggle，点值才弹窗，能返回上一级）
--- 注意：不再用 Menu:new + UIManager:show 推菜单，而是返回 item_table
--- 直接嵌入 addToMainMenu 的 sub_item_table，KOReader Menu widget 自动处理导航
+-- 旧的 build_settings_items / build_access_info_items 已删除
+-- 现在所有项平铺在 addToMainMenu 的 sub_item_table 里（按用户给的最终版）
 -- ============================================================
-local function build_settings_items(self)
-    -- 注意：菜单本身 keep_menu_open=true 时，InputDialog 关闭后菜单不会关，
-    -- Menu widget 会重新调用 text_func/value_func，所以读最新设置即可
-
-    return {
-        {
-            text = _("HTTP/WebDAV 端口"),
-            value_func = function() return get_setting("http_port") end,
-            keep_menu_open = true,
-            callback = function()
-                show_port_dialog(
-                    _("HTTP/WebDAV 端口"),
-                    get_setting("http_port"),
-                    function(v) set_setting("http_port", v) end
-                )
-            end,
-        },
-        {
-            text = _("FTP 端口"),
-            value_func = function() return get_setting("ftp_port") end,
-            enabled_func = function() return get_setting("ftp_enabled") end,
-            keep_menu_open = true,
-            callback = function()
-                show_port_dialog(
-                    _("FTP 端口"),
-                    get_setting("ftp_port"),
-                    function(v) set_setting("ftp_port", v) end
-                )
-            end,
-        },
-        {
-            text = _("启用 FTP"),
-            checked_func = function() return get_setting("ftp_enabled") end,
-            keep_menu_open = true,
-            callback = function()
-                set_setting("ftp_enabled", not get_setting("ftp_enabled"))
-            end,
-        },
-        {
-            text = _("数据目录"),
-            value_func = function() return get_setting("data_path") end,
-            keep_menu_open = true,
-            callback = function()
-                show_text_dialog(
-                    _("数据目录"),
-                    get_setting("data_path"),
-                    function(v) set_setting("data_path", v) end
-                )
-            end,
-        },
-        {
-            text = _("开机自启"),
-            checked_func = function() return get_setting("autostart") end,
-            keep_menu_open = true,
-            callback = function()
-                set_setting("autostart", not get_setting("autostart"))
-            end,
-        },
-        {
-            separator = true,
-        },
-        {
-            text = _("需要密码"),
-            checked_func = function() return get_setting("require_pass") end,
-            keep_menu_open = true,
-            callback = function()
-                set_setting("require_pass", not get_setting("require_pass"))
-            end,
-        },
-        {
-            text = _("管理员用户名"),
-            value_func = function() return get_setting("admin_user") end,
-            enabled_func = function() return get_setting("require_pass") end,
-            keep_menu_open = true,
-            callback = function()
-                show_text_dialog(
-                    _("管理员用户名"),
-                    get_setting("admin_user"),
-                    function(v) set_setting("admin_user", v) end
-                )
-            end,
-        },
-        {
-            text = _("管理员密码"),
-            value_func = function()
-                local p = get_setting("admin_pass")
-                if p == "" then return _("未设置") end
-                return string.rep("•", math.min(12, #p))
-            end,
-            enabled_func = function() return get_setting("require_pass") end,
-            keep_menu_open = true,
-            callback = function()
-                -- 安全：永远不显示已设密码，让用户重新输入
-                show_text_dialog(
-                    _("管理员密码（输入新值覆盖）"),
-                    "",
-                    function(v) set_setting("admin_pass", v) end,
-                    true  -- password mode
-                )
-            end,
-        },
-        {
-            separator = true,
-        },
-        {
-            text = _("只读模式"),
-            checked_func = function() return get_setting("readonly") end,
-            keep_menu_open = true,
-            callback = function()
-                set_setting("readonly", not get_setting("readonly"))
-            end,
-        },
-        {
-            text = _("安静模式"),
-            checked_func = function() return get_setting("quiet") end,
-            keep_menu_open = true,
-            callback = function()
-                set_setting("quiet", not get_setting("quiet"))
-            end,
-        },
-    }
-end
-
--- ============================================================
--- 访问信息子菜单（只读），同样返回 item_table
--- ============================================================
-local function build_access_info_items()
-    local items = {
-        {
-            text = _("状态"),
-            value_func = function() return is_running() and _("运行中") or _("未运行") end,
-        },
-        {
-            text = _("本机 IP"),
-            value_func = function() return get_network_info() end,
-        },
-        {
-            text = _("HTTP/WebDAV 端口"),
-            value_func = function() return get_setting("http_port") end,
-        },
-        {
-            text = _("数据目录"),
-            value_func = function() return get_setting("data_path") end,
-        },
-        {
-            text = _("访问模式"),
-            value_func = function()
-                if get_setting("readonly") then return _("只读") end
-                if get_setting("require_pass") then return _("需要密码") end
-                return _("匿名读写")
-            end,
-        },
-        {
-            separator = true,
-        },
-        {
-            text = _("HTTP 访问地址"),
-            value_func = function()
-                return "http://" .. get_network_info() .. ":" .. get_setting("http_port") .. "/"
-            end,
-        },
-        {
-            text = _("WebDAV（同 HTTP 端口）"),
-            value_func = function()
-                return "http://" .. get_network_info() .. ":" .. get_setting("http_port") .. "/"
-            end,
-        },
-        {
-            text = _("FTP"),
-            value_func = function()
-                if not get_setting("ftp_enabled") then return _("未启用") end
-                return "ftp://" .. get_network_info() .. ":" .. get_setting("ftp_port") .. "/"
-            end,
-            enabled_func = function() return get_setting("ftp_enabled") end,
-        },
-    }
-    return items
-end
 
 -- ============================================================
 -- 主体类
@@ -622,14 +509,18 @@ function Copyparty:onDispatcherRegisterActions()
 end
 
 function Copyparty:addToMainMenu(menu_items)
-    -- 直接把子菜单项内嵌在 sub_item_table 里（simpleUI 风格）
-    -- KOReader 的 Menu widget 会自动处理导航（进子菜单 + 返回上一级）
+    -- 全部项平铺在 Copyparty 顶层（用户最终版）
+    -- - sorting_hint = "filemanager"：放到「文件管理设置」分区
+    -- - 父菜单项加 checked_func：运行时显示 ✓，停止显示空格（仿 SSH）
+    -- - 运行时灰掉配置项（除运行 toggle、当前状态、最近日志、开机自启）
+    -- - 文案用 text_func 把当前值拼进去（SSH 风格）
     menu_items.copyparty = {
-        sorting_hint = "network",  -- 放到 KOReader 主菜单的"网络"分区
+        sorting_hint = "filemanager",
         text = _("Copyparty"),
+        checked_func = function() return is_running() end,
         sub_item_table = {
+            -- 主开关：始终可点
             {
-                -- 主开关：simpleUI 风格的 toggle（左侧 ✓）
                 text = _("运行 Copyparty"),
                 checked_func = function() return is_running() end,
                 keep_menu_open = true,
@@ -637,28 +528,130 @@ function Copyparty:addToMainMenu(menu_items)
                     if is_running() then stop_server() else start_server(self) end
                 end,
             },
+            -- 操作型：始终可点
             {
-                -- 进到子菜单：访问信息
-                text = _("访问信息"),
-                sub_item_table = build_access_info_items(),
-            },
-            {
-                -- 进到子菜单：设置
-                text = _("设置"),
-                sub_item_table = build_settings_items(self),
-            },
-            {
-                separator = true,
-            },
-            {
-                -- 操作型：一次性查看日志
-                text = _("查看最近日志"),
-                callback = function() show_log() end,
-            },
-            {
-                -- 操作型：完整状态弹窗
-                text = _("完整状态信息"),
+                text = _("当前状态"),
                 callback = function() show_server_info() end,
+            },
+            -- 配置项：运行时灰掉
+            {
+                text_func = function()
+                    return T(_("HTTP/WebDAV端口: %1"), get_setting("http_port"))
+                end,
+                enabled_func = function() return not is_running() end,
+                keep_menu_open = true,
+                callback = function()
+                    show_port_dialog(
+                        _("HTTP/WebDAV 端口"),
+                        get_setting("http_port"),
+                        function(v) set_setting("http_port", v) end
+                    )
+                end,
+            },
+            {
+                text = _("启用 FTP"),
+                checked_func = function() return get_setting("ftp_enabled") end,
+                enabled_func = function() return not is_running() end,
+                keep_menu_open = true,
+                callback = function()
+                    set_setting("ftp_enabled", not get_setting("ftp_enabled"))
+                end,
+            },
+            {
+                text_func = function()
+                    return T(_("FTP端口: %1"), get_setting("ftp_port"))
+                end,
+                -- 运行时灰掉 AND 未启用 FTP 时灰掉
+                enabled_func = function()
+                    return get_setting("ftp_enabled") and not is_running()
+                end,
+                keep_menu_open = true,
+                callback = function()
+                    show_port_dialog(
+                        _("FTP 端口"),
+                        get_setting("ftp_port"),
+                        function(v) set_setting("ftp_port", v) end
+                    )
+                end,
+            },
+            {
+                text_func = function()
+                    return T(_("根目录: %1"), get_setting("data_path"))
+                end,
+                enabled_func = function() return not is_running() end,
+                keep_menu_open = true,
+                callback = function()
+                    show_text_dialog(
+                        _("根目录"),
+                        get_setting("data_path"),
+                        function(v) set_setting("data_path", v) end
+                    )
+                end,
+            },
+            {
+                text_func = function()
+                    return T(_("用户名: %1"), get_setting("admin_user"))
+                end,
+                -- 运行时灰掉（密码已设置时才有意义，但运行时仍不能改）
+                enabled_func = function() return not is_running() end,
+                keep_menu_open = true,
+                callback = function()
+                    show_text_dialog(
+                        _("用户名"),
+                        get_setting("admin_user"),
+                        function(v) set_setting("admin_user", v) end
+                    )
+                end,
+            },
+            {
+                text_func = function()
+                    local p = get_setting("admin_pass")
+                    return T(_("密码: %1"), p == "" and _("未设置") or _("已设置"))
+                end,
+                enabled_func = function() return not is_running() end,
+                keep_menu_open = true,
+                callback = function()
+                    -- 永远不显示已设密码，让用户重新输入
+                    -- 输入空字符串 = 取消密码（删除 require_pass 逻辑依赖）
+                    show_text_dialog(
+                        _("密码（输入空 = 无密码）"),
+                        "",
+                        function(v) set_setting("admin_pass", v) end,
+                        true  -- password mode
+                    )
+                end,
+            },
+            {
+                text = _("文件只读"),
+                checked_func = function() return get_setting("readonly") end,
+                enabled_func = function() return not is_running() end,
+                keep_menu_open = true,
+                callback = function()
+                    set_setting("readonly", not get_setting("readonly"))
+                end,
+            },
+            {
+                text = _("日志安静模式"),
+                checked_func = function() return get_setting("quiet") end,
+                enabled_func = function() return not is_running() end,
+                keep_menu_open = true,
+                callback = function()
+                    set_setting("quiet", not get_setting("quiet"))
+                end,
+            },
+            -- 操作型：始终可点
+            {
+                text = _("最近日志"),
+                callback = function() show_log_pager() end,
+            },
+            -- 始终可点（仿 SSH autostart：运行中也能切）
+            {
+                text = _("开机自启"),
+                checked_func = function() return get_setting("autostart") end,
+                keep_menu_open = true,
+                callback = function()
+                    set_setting("autostart", not get_setting("autostart"))
+                end,
             },
         },
     }
