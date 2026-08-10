@@ -158,12 +158,23 @@ local function build_command()
     end
 
     -- 数据目录：用 -v 挂载（copyparty 不接受位置参数，必须 -v）
-    -- vol 格式: SRC:DST:FLAG，空 DST（连续两个冒号）= 挂到根 / 下
-    -- FLAG r = read-only
+    -- vol 格式: SRC:DST:FLAG
+    --   DST 用 "/" 表示根；空 DST（双冒号）只在某些版本上有效，1.20.20 测试时
+    --   Kindle 上行为不一致（响应 "howdy stranger" 但没列文件）。
+    --   用显式的 "/" 兼容性最好。
+    --   FLAG r = read-only
+    --   加 e2d volflag 启用文件索引（不然默认只有欢迎页，不会列文件）
     local dp = get_setting("data_path")
     local flag = get_setting("readonly") and "r" or ""
-    table.insert(parts, "-v")
-    table.insert(parts, dp .. "::" .. flag)
+    -- volflag 加 e2d（enable database + 文件索引）
+    -- 如果只读模式，只读就够；否则加 e2dsa 让文件能列能搜
+    if get_setting("readonly") then
+        table.insert(parts, "-v")
+        table.insert(parts, dp .. ":/:r")
+    else
+        table.insert(parts, "-v")
+        table.insert(parts, dp .. ":/:e2d")
+    end
 
     return table.concat(parts, " ")
 end
