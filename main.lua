@@ -283,25 +283,36 @@ local function show_server_info()
     local readonly = get_setting("readonly")
     local pass = get_setting("admin_pass")
 
+    -- 严格按用户给的模板，每行字段位置固定
+    -- 字段对齐规则（中文2字符宽 ≈ 英文4字符宽）：
+    --   "HTTP端口" (5字) + 4 空格
+    --   "FTP端口"  (4字) + 4 空格
+    --   "模式"     (2字) + 1 空格
+    --   "认证"     (2字) + 8 空格
+    --   "根目录"   (3字) + 4 空格
+    --   "访问地址"  (4字) + 1 空格 + "：" + 1 空格（"访问地址 ："）
+    --   URL 独立一行（无缩进）
     local lines = {
-        -- 第一行同时作为状态指示：Copyparty 运行中 / 未运行
+        -- 第 1 行
         T(_("Copyparty %1"), running and _("运行中") or _("未运行")),
-        -- 第 2 行：HTTP 端口
+        -- 第 2 行：HTTP端口
         "  " .. _("HTTP端口") .. "    " .. http_port,
-        -- 第 3 行：FTP 端口（启用显示端口，关闭显示"（关闭）"）
+        -- 第 3 行：FTP端口（关闭时附"（关闭）"）
         "  " .. _("FTP端口") .. "    " .. (ftp_on and ftp_port or (ftp_port .. "（关闭）")),
-        -- 第 4 行：模式
-        "  " .. _("模式") .. "        " .. (readonly and _("只读") or _("读写")),
-        -- 第 5 行：认证（密码非空 = 需要密码；空 = 匿名）
+        -- 第 4 行：模式（只读 / 读写）
+        "  " .. _("模式") .. " " .. (readonly and _("只读") or _("读写")),
+        -- 第 5 行：认证
         "  " .. _("认证") .. "        " .. (pass ~= "" and _("需要密码") or _("匿名无密码")),
         -- 第 6 行：根目录
         "  " .. _("根目录") .. "    " .. get_setting("data_path"),
-        -- 第 7 行：访问地址
-        "  " .. _("访问地址") .. " http://" .. ip .. ":" .. http_port .. "/",
+        -- 第 7 行：访问地址 ：
+        "  " .. _("访问地址") .. " ：",
+        -- 第 8 行：HTTP URL（独立一行，无缩进）
+        "http://" .. ip .. ":" .. http_port .. "/",
     }
-    -- FTP 启用时附 ftp 地址（缩进 4 个空格对齐）
+    -- FTP 启用时附加 FTP URL（独立一行）
     if ftp_on then
-        table.insert(lines, "    ftp://" .. ip .. ":" .. ftp_port .. "/")
+        table.insert(lines, "ftp://" .. ip .. ":" .. ftp_port .. "/")
     end
 
     UIManager:show(InfoMessage:new{
