@@ -133,15 +133,13 @@ local function build_command()
         end
     end
 
-    -- 只读模式（通过 volume 标志实现）
-    if get_setting("readonly") then
-        local dp = get_setting("data_path")
-        table.insert(parts, "-v")
-        table.insert(parts, dp .. ":/:r")
-    end
-
-    -- 数据路径（最后一个位置参数）
-    table.insert(parts, get_setting("data_path"))
+    -- 数据目录：用 -v 挂载（copyparty 不接受位置参数，必须 -v）
+    -- vol 格式: SRC:DST:FLAG，空 DST（连续两个冒号）= 挂到根 / 下
+    -- FLAG r = read-only
+    local dp = get_setting("data_path")
+    local flag = get_setting("readonly") and "r" or ""
+    table.insert(parts, "-v")
+    table.insert(parts, dp .. "::" .. flag)
 
     return table.concat(parts, " ")
 end
