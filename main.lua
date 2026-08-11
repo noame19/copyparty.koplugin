@@ -16,7 +16,6 @@ local Device = require("device")
 local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
-local ButtonDialog = require("ui/widget/buttondialog")
 local Menu = require("ui/widget/menu")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -56,6 +55,7 @@ local DEFAULTS = {
     admin_pass      = "",       -- 管理员密码（仅在 require_pass=true 时使用）
     readonly        = false,    -- 是否只读
     quiet           = true,     -- 是否安静模式（少打日志）
+    enable_thumb    = true,     -- 是否启用缩略图（默认开；Kindle 无 ffmpeg，实际只能生成 jpg/png 封面）
 }
 
 -- ============================================================
@@ -157,21 +157,63 @@ local function build_command()
         end
     end
 
+    -- ===========================================================
+    -- 边缘设备省资源参数（基于 copyparty v1.20.20 源码调研）
+    -- 单核 ARM / 512MB RAM / 慢 eMMC 的 Kindle 必须关掉这些
+    -- ===========================================================
+
+    -- 单核强制走线程 broker（避免 multiprocessing 启动开销）
+    table.insert(parts, "-j")
+    table.insert(parts, "1")
+
+    -- LAN 上禁用 TLS（http-only 模式）
+    table.insert(parts, "--http-only")
+
+    -- 关掉开发者调试端点（?reload=cfg / ?scan / ?stack / 启动 voldump）
+    -- 这些不是用户功能，是 copyparty 给自己排查用的，关掉减少攻击面
+    table.insert(parts, "--no-reload")
+    table.insert(parts, "--no-rescan")
+    table.insert(parts, "--no-stack")
+    table.insert(parts, "--no-voldump")
+
+    -- KOReader 不浏览 zip/tar 内部，也不下载成 zip/tar
+    -- 但保留 "下载整个文件夹为 zip" 功能（--zipmaxn/s 限制大小）
+    table.insert(parts, "--no-zls")
+    table.insert(parts, "--no-tarcmp")
+    table.insert(parts, "--zipmaxn")
+    table.insert(parts, "9999")
+    table.insert(parts, "--zipmaxs")
+    table.insert(parts, "4G")
+
+    -- 关 markdown / readme / prologue 渲染（省 jinja2 + marked.js）
+    -- KOReader 用户在电脑浏览器看，不在 copyparty 渲染
+    table.insert(parts, "--no-readme")
+    table.insert(parts, "--no-logues")
+
+    -- 把 HTML 当纯文本显示 + 关 JS 注入（防 XSS，省渲染）
+    table.insert(parts, "--no-html")
+    table.insert(parts, "--no-script")
+
+    -- http-only 模式下不需要自动签发证书
+    table.insert(parts, "--no-crt")
+
+    -- 日志不强制 fsync（省 eMMC 寿命，丢几行无伤大雅）
+    table.insert(parts, "--no-logflush")
+
+    -- 缩略图：用户可关（默认开；Kindle 无 ffmpeg 实际只能跑 jpg/png/webp 等纯图片）
+    if not get_setting("enable_thumb") then
+        table.insert(parts, "--no-thumb")
+    end
+
     -- 数据目录：用 -v 挂载（copyparty 不接受位置参数，必须 -v）
     -- vol 格式: SRC:DST:FLAG
-    --   DST 用 "/" 表示根；examples 中 '.::r' 表示空 DST（双冒号）
-    --   FLAG r = read-only；e2d/e2dsa 不是 volflag（那是 YAML 配置格式）
-    --
-    -- 文件索引用全局 flag '-e2dsa'（enable file indexing and FS scanning）
-    -- 不加的话访问 / 时只显示默认欢迎页 "howdy stranger"，不列文件
+    --   DST 用 "/" 表示根；'.::r'（双冒号）表示空 DST + FLAG=r
+    --   copyparty 默认就能列文件（走 httpsrv 常规 VFS）
+    --   不传 -e2dsa 就不建 up2k sqlite（省 5 分钟 SHA-512 扫盘 + eMMC 写入）
     local dp = get_setting("data_path")
     local flag = get_setting("readonly") and "r" or ""
     table.insert(parts, "-v")
     table.insert(parts, dp .. ":/:" .. flag)
-    -- 可写模式才需要 -e2dsa 启用索引；只读模式不需要（直接列文件）
-    if not get_setting("readonly") then
-        table.insert(parts, "-e2dsa")
-    end
 
     return table.concat(parts, " ")
 end
@@ -329,100 +371,6 @@ local function show_server_info()
 end
 
 -- ============================================================
--- "最近日志" 翻页弹窗：每页 15 行，最多 4 页，末尾 60 行
--- 用 ButtonDialog 实现 [上一页][下一页][关闭] 三个按钮
--- ============================================================
-local function show_log_pager()
-    -- 1. 读完整份日志
-    local all = {}
-    local f = io.open(log_path, "r")
-    if f then
-        for line in f:lines() do
-            table.insert(all, line)
-        end
-        f:close()
-    end
-
-    -- 2. 只保留末尾 60 行（超过 60 行就裁掉开头的）
-    if #all > 60 then
-        local trimmed = {}
-        for i = #all - 59, #all do
-            table.insert(trimmed, all[i])
-        end
-        all = trimmed
-    end
-
-    -- 3. 计算总页数（每页 15 行，至少 1 页）
-    local total_pages = math.max(1, math.ceil(#all / 15))
-    -- 默认打开到最后一页（最新的）
-    local current_page = total_pages
-    local current_dialog
-
-    local function get_content()
-        if #all == 0 then return _("（暂无日志）") end
-        local start_idx = (current_page - 1) * 15 + 1
-        local finish_idx = math.min(start_idx + 14, #all)
-        local page = {}
-        for i = start_idx, finish_idx do
-            table.insert(page, all[i])
-        end
-        return table.concat(page, "\n")
-    end
-
-    local function get_title()
-        if #all == 0 then return _("最近日志") end
-        return T(_("最近日志（第 %1/%2 页）"), current_page, total_pages)
-    end
-
-    local function show_page()
-        -- 关掉旧弹窗，开新的（KOReader 的 ButtonDialog 不能热更新内容）
-        if current_dialog then
-            UIManager:close(current_dialog)
-        end
-        current_dialog = ButtonDialog:new{
-            title = get_title(),
-            text = get_content(),
-            width_factor = 0.95,
-            buttons = {
-                {
-                    {
-                        text = _("上一页"),
-                        -- 第一页时灰掉
-                        enabled_func = function() return current_page > 1 end,
-                        callback = function()
-                            if current_page > 1 then
-                                current_page = current_page - 1
-                                show_page()
-                            end
-                        end,
-                    },
-                    {
-                        text = _("下一页"),
-                        -- 最后一页时灰掉
-                        enabled_func = function() return current_page < total_pages end,
-                        callback = function()
-                            if current_page < total_pages then
-                                current_page = current_page + 1
-                                show_page()
-                            end
-                        end,
-                    },
-                    {
-                        text = _("关闭"),
-                        callback = function()
-                            UIManager:close(current_dialog)
-                        end,
-                    },
-                },
-            },
-        }
-        UIManager:show(current_dialog)
-    end
-
-    show_page()
-end
-
--- ============================================================
 -- 输入对话框：端口号
 -- ============================================================
 local function show_port_dialog(title, current_value, on_save)
@@ -527,7 +475,7 @@ function Copyparty:addToMainMenu(menu_items)
     --   用 sorting_hint = "network" 会跑到 SSH 子菜单里去（不符合用户预期）
     -- - 父菜单项加 checked_func：运行时显示 ✓，停止显示空格（仿 SSH）
     -- - 父菜单项加 hold_callback：长按 Copyparty 这一行也能启动/停止（仿 SSH）
-    -- - 运行时灰掉配置项（除运行 toggle、当前状态、最近日志、开机自启）
+    -- - 运行时灰掉配置项（除运行 toggle、当前状态、缩略图、开机自启）
     -- - 所有 callback 项 keep_menu_open=true（弹窗不关闭菜单，仿 SSH）
     -- - 文案用 text_func 把当前值拼进去（SSH 风格）
     menu_items.copyparty = {
@@ -558,6 +506,15 @@ function Copyparty:addToMainMenu(menu_items)
                 callback = function() show_server_info() end,
             },
             -- 配置项：运行时灰掉
+            {
+                text = _("启用缩略图"),
+                checked_func = function() return get_setting("enable_thumb") end,
+                enabled_func = function() return not is_running() end,
+                keep_menu_open = true,
+                callback = function()
+                    set_setting("enable_thumb", not get_setting("enable_thumb"))
+                end,
+            },
             {
                 text_func = function()
                     return T(_("HTTP/WebDAV端口: %1"), get_setting("http_port"))
@@ -655,19 +612,13 @@ function Copyparty:addToMainMenu(menu_items)
                 end,
             },
             {
-                text = _("日志安静模式"),
+                text = _("启用安静日志"),
                 checked_func = function() return get_setting("quiet") end,
                 enabled_func = function() return not is_running() end,
                 keep_menu_open = true,
                 callback = function()
                     set_setting("quiet", not get_setting("quiet"))
                 end,
-            },
-            -- 操作型：弹窗后保持菜单
-            {
-                text = _("最近日志"),
-                keep_menu_open = true,
-                callback = function() show_log_pager() end,
             },
             -- 始终可点（仿 SSH autostart：运行中也能切）
             {

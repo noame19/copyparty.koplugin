@@ -21,7 +21,7 @@
 相比 `filebrowserplus.koplugin`（KUAL 圈最常见的同类方案）的**差异**：
 
 - ✅ **功能多得多**：HTTP + WebDAV + FTP 三协议同时跑，比 filebrowser 的纯 HTTP 实用
-- ✅ **缩略图更好**：copyparty 内置 ffmpeg 集成，能给视频缩略图（需要 ffmpeg 二进制）
+- ✅ **支持打包下载**：浏览器一键把整个文件夹打成 zip 下到电脑（filebrowser 不支持）
 - ⚠️ **更耗电**：Python 运行时 + 多协议监听，空载 CPU 比 filebrowser 高 30–50%
 - ⚠️ **需要装 Python 3**：Kindle 用户得自己装（见下文前置条件）
 
@@ -80,16 +80,49 @@ Kindle 官方固件不带 Python。常见解决方案：
 
 | 选项 | 默认 | 说明 |
 |------|------|------|
+| **运行 Copyparty** | 关 | 主开关；勾上 = 启动服务，取消 = 停止 |
+| **当前状态** | — | 弹窗显示 IP、端口、模式、根目录、访问 URL（8 行紧凑模板）|
+| **启用缩略图** | 开 | 浏览器里能看到 jpg/png/webp 等图片封面；**Kindle 上没有 ffmpeg，所以 epub/pdf/视频的封面出不来**。想省 CPU 就关掉 |
 | **HTTP/WebDAV 端口** | 3923 | copyparty 主端口，改端口要确保路由器没封 |
-| **FTP** | 关（省电+减少攻击面，要用时再开） | 开起来才启动 FTP 服务 |
-| **FTP 端口** | 3921 | FTP 服务端口 |
-| **数据目录** | `/mnt/us` | Kindle 用户区；Kobo 用户改成 `/mnt/onboard` |
+| **启用 FTP** | 关（省电+减少攻击面，要用时再开） | 开起来才启动 FTP 服务 |
+| **FTP 端口** | 3921 | FTP 服务端口（仅在 FTP 启用时可改）|
+| **启用只读模式** | 关 | 开了就只能下载/浏览，不能上传或删 |
+| **根目录** | `/mnt/us` | Kindle 用户区；Kobo 用户改成 `/mnt/onboard` |
+| **用户名** | `admin` | 登录用户名（仅在密码非空时使用）|
+| **密码（输入空 = 无密码）** | 空 | 登录密码（不显示已设值）|
+| **启用安静日志** | 开（推荐） | 关掉会输出详细启动信息（copyparty 内部仍然写日志到 `copyparty.log`）|
 | **开机自启** | 关 | KOReader 启动时自动拉起 copyparty |
-| **需要密码** | 关（无密码匿名） | 开了就用菜单里的"管理员用户名/密码"登录 |
-| **管理员用户名** | `admin` | 登录用户名 |
-| **设置密码** | 空 | 登录密码（不显示已设值） |
-| **只读模式** | 关 | 开了就只能下载/浏览，不能上传或删 |
-| **安静模式** | 开（推荐） | 关掉会输出详细日志 |
+
+### 默认启用的省资源参数
+
+插件基于 [copyparty v1.20.20 源码调研](https://github.com/9001/copyparty)，默认强制传以下 14 个参数保护 Kindle：
+
+```
+-j 1                  单核强制走线程 broker
+--http-only           LAN 上禁 TLS
+--no-reload           关 ?reload=cfg 调试端点
+--no-rescan           关 ?scan 调试端点
+--no-stack            关 ?stack 调试端点
+--no-voldump          关启动时卷列表输出
+--no-zls              不浏览 zip/tar 内部
+--no-tarcmp           不打包 tar 下载
+--zipmaxn 9999        zip 打包最大文件数
+--zipmaxs 4G          zip 打包最大体积
+--no-readme           不渲染 readme.md
+--no-logues           不渲染 prologue/epilogue
+--no-html             HTML 文件当纯文本显示
+--no-script           HTML 不执行 JS（防 XSS）
+--no-crt              http-only 后证书无意义
+--no-logflush         日志不强制 fsync（省 eMMC 寿命）
+```
+
+**省下来的**：up2k 数据库（`-e2dsa`）不传 → 启动不用等 5 分钟扫盘算 SHA-512；多进程 broker 不开 → 单核不被进程间切换拖累。
+
+### Kindle 上做不到的
+
+- **PDF / EPUB / MOBI 内置预览**：copyparty 不内置 `pdf.js` / `epub.js`，浏览器点开会下载到本地用 KOReader / Calibre 打开
+- **PDF 缩略图**：缺 `poppler` / `ffmpeg`
+- **SMB 共享**：插件已移除（需要 root + 路由器 NAT 445，配置麻烦）
 
 ### 协议使用示例
 
