@@ -55,7 +55,6 @@ local DEFAULTS = {
     admin_pass      = "",       -- 管理员密码（仅在 require_pass=true 时使用）
     readonly        = false,    -- 是否只读
     quiet           = true,     -- 是否安静模式（少打日志）
-    enable_thumb    = true,     -- 是否启用缩略图（默认开；Kindle 无 ffmpeg，实际只能生成 jpg/png 封面）
 }
 
 -- ============================================================
@@ -200,10 +199,8 @@ local function build_command()
     -- 日志不强制 fsync（省 eMMC 寿命，丢几行无伤大雅）
     table.insert(parts, "--no-logflush")
 
-    -- 缩略图：用户可关（默认开；Kindle 无 ffmpeg 实际只能跑 jpg/png/webp 等纯图片）
-    if not get_setting("enable_thumb") then
-        table.insert(parts, "--no-thumb")
-    end
+    -- 缩略图默认开启（Kindle 无 ffmpeg 实际只能跑 jpg/png/webp 等纯图片）
+    -- 想关闭只能手动改启动参数；不暴露菜单 toggle（用户偏好简洁菜单）
 
     -- 数据目录：用 -v 挂载（copyparty 不接受位置参数，必须 -v）
     -- vol 格式: SRC:DST:FLAG
@@ -506,15 +503,6 @@ function Copyparty:addToMainMenu(menu_items)
                 callback = function() show_server_info() end,
             },
             -- 配置项：运行时灰掉
-            {
-                text = _("启用缩略图"),
-                checked_func = function() return get_setting("enable_thumb") end,
-                enabled_func = function() return not is_running() end,
-                keep_menu_open = true,
-                callback = function()
-                    set_setting("enable_thumb", not get_setting("enable_thumb"))
-                end,
-            },
             {
                 text_func = function()
                     return T(_("HTTP/WebDAV端口: %1"), get_setting("http_port"))
